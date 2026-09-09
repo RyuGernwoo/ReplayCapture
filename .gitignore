@@ -1,0 +1,56 @@
+# CMake / build outputs
+/build/
+/build-*/
+/out/
+/dist/
+/artifacts/
+CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+Testing/
+
+# Visual Studio / local IDE settings
+.vs/
+.vscode/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+
+# Native compiler and linker outputs
+*.obj
+*.o
+*.pch
+*.pdb
+*.ilk
+*.idb
+*.tlog/
+*.exe
+*.dll
+*.lib
+*.exp
+*.msi
+*.msix
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+/settings.json
+
+# Local recordings, temporary exports, logs and dumps
+/recordings/
+/captures/
+/logs/
+*.mp4
+*.partial
+*.log
+*.dmp
+*.tmp
+
+# OS metadata
+Thumbs.db
+Desktop.ini
+.DS_Store
