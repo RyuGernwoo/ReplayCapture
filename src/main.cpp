@@ -13,6 +13,8 @@
 using namespace replay;
 namespace {
 constexpr UINT TrayMessage = WM_APP + 1;
+constexpr int DesignWidth = 960, DesignHeight = 650;
+constexpr DWORD WindowStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
 enum Id {
     Tab = 100,
     Start,
@@ -80,10 +82,6 @@ struct Control {
     HWND handle;
     int page, x, y, w, h;
 };
-struct Row {
-    int page, height;
-    std::vector<HWND> items;
-};
 struct App {
     HWND window{}, tab{};
     HFONT font{}, titleFont{};
@@ -92,10 +90,9 @@ struct App {
     std::vector<Monitor> screens;
     std::vector<AudioDevice> devices;
     std::vector<Control> controls;
-    std::vector<Row> rows;
+    std::vector<Control> groups;
     std::vector<HWND> headings;
-    HWND title{}, subtitle{};
-    int scroll = 0, contentHeight = 0;
+    std::vector<HANDLE> privateFonts;
     bool advanced = false, loading = false, dirty = false;
     std::map<int, HWND> fields;
     std::set<uint64_t> announced;
@@ -105,17 +102,25 @@ struct App {
     bool isRecording = false;
     int64_t exitDeadline{};
     std::wstring warning;
+    std::wstring fontFace;
     HBRUSH background = CreateSolidBrush(ui::background());
     ~App() {
         DeleteObject(font);
         DeleteObject(titleFont);
         DeleteObject(background);
+        for (auto handle : privateFonts)
+            RemoveFontMemResourceEx(handle);
     }
     int px(int n) const {
         return MulDiv(n, dpi, 96);
     }
     void fitDpi() {
-        dpi = GetDpiForWindow(window);
+        MONITORINFO info{sizeof(info)};
+        GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &info);
+        dpi =
+            std::max(72u, std::min({GetDpiForWindow(window),
+                                    UINT((info.rcWork.right - info.rcWork.left - 24) * 96 / DesignWidth),
+                                    UINT((info.rcWork.bottom - info.rcWork.top - 56) * 96 / DesignHeight)}));
     }
     HWND control(wchar_t const *klass, std::wstring const &text, int id, int p, int x, int y, int w, int h,
                  DWORD style = 0) {
@@ -128,15 +133,6 @@ struct App {
         controls.push_back({c, p, x, y, w, h});
         if (id)
             fields[id] = c;
-        SetWindowSubclass(
-            c,
-            [](HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR data) -> LRESULT {
-                auto app = reinterpret_cast<App *>(data);
-                if (msg == WM_SETFOCUS)
-                    SendMessageW(app->window, WM_APP + 2, reinterpret_cast<WPARAM>(h), 0);
-                return DefSubclassProc(h, msg, wp, lp);
-            },
-            1, reinterpret_cast<DWORD_PTR>(this));
         return c;
     }
     void label(std::wstring const &t, int p, int x, int y, int w = 180, int h = 24) {
@@ -206,203 +202,207 @@ struct App {
     void selectPage(int p) {
         page = p;
         TabCtrl_SetCurSel(tab, p);
-        scroll = 0;
-        layout();
         keyTest = false;
-        if (fields.contains(TestKey))
-            text(TestKey, L"단축키 테스트");
+        text(TestKey, L"단축키 테스트");
+        layout();
     }
     void layout() {
-        RECT client{};
-        GetClientRect(window, &client);
-        int width = MulDiv(client.right, 96, dpi), height = MulDiv(client.bottom, 96, dpi);
-        bool wide = width >= 1000;
-        int left = wide ? 208 : 24, area = std::max(240, width - left - 24);
-        auto move = [&](HWND h, int x, int y, int w, int ht) {
-            MoveWindow(h, px(x), px(y - scroll), px(w), px(ht), TRUE);
-        };
-        for (auto const &c : controls)
-            ShowWindow(c.handle, c.page == page || (c.page == 5 && page == 1 && advanced) || c.page < 0
-                                     ? SW_SHOW
-                                     : SW_HIDE);
-        move(title, 24, 18, width - 48, 38);
-        move(subtitle, 24, 60, width - 48, 26);
-        ShowWindow(tab, wide ? SW_HIDE : SW_SHOW);
-        move(tab, 24, 100, width - 48, 36);
-        for (int i = 0; i < 5; ++i) {
-            auto h = get(NavRecord + i);
-            ShowWindow(h, wide ? SW_SHOW : SW_HIDE);
-            move(h, 24, 112 + i * 54, 164, 44);
+        for (auto const &c : controls) {
+            bool visible = c.page < 0 || (c.page == page && !(page == 1 && advanced)) ||
+                           (page == 1 && ((c.page == 5 && advanced) || c.page == 6));
+            if (c.handle == tab)
+                visible = false; // Retained only as the navigation notification bridge.
+            if (GetDlgCtrlID(c.handle) >= 1000)
+                visible = false; // Validation uses the fixed feedback area.
+            MoveWindow(c.handle, px(c.x), px(c.y), px(c.w), px(c.h), FALSE);
+            ShowWindow(c.handle, visible ? SW_SHOWNA : SW_HIDE);
         }
-        int y = wide ? 110 : 160;
-        for (auto const &row : rows) {
-            if (row.page != page && !(row.page == 5 && page == 1 && advanced))
-                continue;
-            if (row.items.size() == 1 && GetDlgCtrlID(row.items[0]) >= 1000 &&
-                GetWindowTextLengthW(row.items[0]) == 0) {
-                ShowWindow(row.items[0], SW_HIDE);
-                continue;
-            }
-            int count = int(row.items.size());
-            int cell = (area - (count - 1) * 12) / count;
-            bool stack = cell < 180 && count > 1;
-            for (int i = 0; i < count; ++i) {
-                auto h = row.items[i];
-                wchar_t klass[64]{};
-                GetClassNameW(h, klass, 64);
-                int ht = wcscmp(klass, WC_COMBOBOXW) == 0 ? 250 : row.height;
-                move(h, stack ? left : left + i * (cell + 12), y, stack ? area : cell, ht);
-                if (stack)
-                    y += row.height + 12;
-            }
-            if (!stack)
-                y += row.height + 12;
-        }
-        move(get(Exit), left, y + 12, 164, 40);
-        contentHeight = y + 76;
-        int bounded = std::clamp(scroll, 0, std::max(0, contentHeight - height));
-        if (bounded != scroll) {
-            scroll = bounded;
-            layout();
-            return;
-        }
-        SCROLLINFO si{sizeof(si), SIF_RANGE | SIF_PAGE | SIF_POS};
-        si.nMax = contentHeight - 1;
-        si.nPage = height;
-        si.nPos = scroll;
-        SetScrollInfo(window, SB_VERT, &si, TRUE);
-        int listWidth = px(area);
         for (int i = 0; i < 3; ++i)
-            ListView_SetColumnWidth(get(Jobs), i, px(i == 2 ? 150 : 76));
-        ListView_SetColumnWidth(get(Jobs), 3, std::max(px(120), listWidth - px(302)));
-        InvalidateRect(window, nullptr, TRUE);
+            ListView_SetColumnWidth(get(Jobs), i, px(i == 2 ? 132 : 68));
+        ListView_SetColumnWidth(get(Jobs), 3, px(388));
+        // A page change must repaint *both* old and new navigation buttons.
+        RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+    }
+    void loadFonts() {
+        for (int id : {IDR_FONT_REGULAR, IDR_FONT_SEMIBOLD}) {
+            auto module = GetModuleHandleW(nullptr);
+            auto resource = FindResourceW(module, MAKEINTRESOURCEW(id), RT_RCDATA);
+            DWORD count = 0;
+            if (resource) {
+                auto memory = LoadResource(module, resource);
+                auto handle = AddFontMemResourceEx(LockResource(memory), SizeofResource(module, resource),
+                                                   nullptr, &count);
+                if (handle)
+                    privateFonts.push_back(handle);
+            }
+        }
     }
     void fonts() {
         if (font)
             DeleteObject(font);
         if (titleFont)
             DeleteObject(titleFont);
-        font = CreateFontW(-px(15), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0,
-                           CLEARTYPE_QUALITY, 0, L"맑은 고딕");
-        titleFont = CreateFontW(-px(26), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0,
-                                CLEARTYPE_QUALITY, 0, L"맑은 고딕");
+        auto face = privateFonts.size() == 2 ? L"Pretendard" : L"맑은 고딕";
+        font = CreateFontW(-px(14), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0,
+                           CLEARTYPE_QUALITY, 0, face);
+        titleFont = CreateFontW(-px(22), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0,
+                                CLEARTYPE_QUALITY, 0, face);
+        auto dc = GetDC(window);
+        auto previous = SelectObject(dc, font);
+        wchar_t resolved[LF_FACESIZE]{};
+        GetTextFaceW(dc, LF_FACESIZE, resolved);
+        fontFace = resolved;
+        SelectObject(dc, previous);
+        ReleaseDC(window, dc);
         for (auto const &c : controls)
             SendMessageW(c.handle, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
         for (auto h : headings)
             SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(titleFont), TRUE);
     }
-    void row(int p, int height, std::initializer_list<HWND> items) {
-        rows.push_back({p, height, items});
+    void group(std::wstring const &t, int p, int x, int y, int w, int h) {
+        groups.push_back({nullptr, p, x, y + 10, w, h - 10});
+        label(t, p, x + 12, y, int(t.size()) * 14 + 12, 22);
     }
-    HWND uiLabel(std::wstring const &value, int p, int height = 24, bool heading = false, int id = 0) {
-        auto h = control(L"STATIC", value, id, p, 0, 0, 600, height);
+    void paintGroups(HDC dc) {
+        auto pen = CreatePen(PS_SOLID, 1, ui::highContrast() ? ui::foreground() : RGB(218, 223, 230));
+        auto oldPen = SelectObject(dc, pen);
+        auto oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        for (auto const &g : groups)
+            if ((g.page == page && !(page == 1 && advanced)) || (page == 1 && advanced && g.page == 5))
+                Rectangle(dc, px(g.x), px(g.y), px(g.x + g.w), px(g.y + g.h));
+        SelectObject(dc, oldBrush);
+        SelectObject(dc, oldPen);
+        DeleteObject(pen);
+    }
+    void fixedLabel(std::wstring const &t, int id, int p, int x, int y, int w, int h = 22,
+                    bool heading = false) {
+        auto handle = control(L"STATIC", t, id, p, x, y, w, h);
         if (heading) {
-            headings.push_back(h);
-            SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(titleFont), TRUE);
+            headings.push_back(handle);
+            SendMessageW(handle, WM_SETFONT, reinterpret_cast<WPARAM>(titleFont), TRUE);
         }
-        row(p, height, {h});
-        return h;
     }
-    HWND uiButton(std::wstring const &value, int id, int p) {
-        button(value, id, p, 0, 0);
-        return get(id);
+    void fixedField(std::wstring const &t, int id, int p, int x, int y, int labelWidth = 180,
+                    int inputWidth = 88) {
+        label(t, p, x, y + 3, labelWidth - 8, 22);
+        edit(id, p, x + labelWidth, y, inputWidth);
+        // Preserve a distinct accessible error label per field; visible error text is at the fixed footer.
+        control(L"STATIC", L"", id + 1000, p, 0, 0, 0, 0);
     }
-    void uiField(std::wstring const &value, int id, int p, bool numeric = true) {
-        uiLabel(value, p);
-        edit(id, p, 0, 0, 500, numeric);
-        row(p, 36, {get(id)});
-        uiLabel(L"", p, 44, false, id + 1000);
-    }
-    void uiCheck(std::wstring const &value, int id, int p) {
-        auto h = control(L"BUTTON", value, id, p, 0, 0, 600, 36, WS_TABSTOP | BS_AUTOCHECKBOX);
-        row(p, 36, {h});
+    void fixedCheck(std::wstring const &t, int id, int p, int x, int y, int w = 330) {
+        control(L"BUTTON", t, id, p, x, y, w, 24, WS_TABSTOP | BS_AUTOCHECKBOX);
     }
     void create() {
         fitDpi();
+        loadFonts();
         fonts();
-        title = control(L"STATIC", L"ReplayCapture", 0, -1, 0, 0, 600, 38);
-        headings.push_back(title);
-        SendMessageW(title, WM_SETFONT, reinterpret_cast<WPARAM>(titleFont), TRUE);
-        subtitle = control(L"STATIC", L"지나간 순간을, 화면과 소리 그대로", 0, -1, 0, 0, 600, 26);
-        tab = control(WC_TABCONTROLW, L"", Tab, -1, 0, 0, 600, 36, WS_TABSTOP);
+        fixedLabel(L"ReplayCapture", 0, -1, 24, 20, 400, 34, true);
+        control(L"STATIC", L"", 0, -1, 20, 66, 916, 2, SS_ETCHEDHORZ);
+        control(L"STATIC", L"", 0, -1, 188, 82, 2, 548, SS_ETCHEDVERT);
+        tab = control(WC_TABCONTROLW, L"", Tab, -2, 0, 0, 0, 0);
         wchar_t const *names[] = {L"녹화", L"설정", L"단축키", L"저장 작업", L"도움말·진단"};
         for (int i = 0; i < 5; ++i) {
             TCITEMW item{};
             item.mask = TCIF_TEXT;
             item.pszText = const_cast<LPWSTR>(names[i]);
             TabCtrl_InsertItem(tab, i, &item);
-            uiButton(names[i], NavRecord + i, -1);
+            button(names[i], NavRecord + i, -1, 20, 94 + i * 46, 150, 34);
         }
-        uiLabel(L"녹화를 시작해 보세요", 0, 40, true, StatusText);
-        uiLabel(L"", 0, 60, false, Summary);
-        control(PROGRESS_CLASSW, L"", Progress, 0, 0, 0, 600, 8);
+        button(L"앱 종료", Exit, -1, 20, 594, 150, 30);
+
+        group(L"녹화 상태", 0, 208, 84, 728, 144);
+        fixedLabel(L"중지", StatusText, 0, 226, 108, 200, 30, true);
+        fixedLabel(L"", Summary, 0, 226, 145, 690, 62);
+        control(PROGRESS_CLASSW, L"", Progress, 0, 226, 210, 690, 6);
         SendMessageW(get(Progress), PBM_SETRANGE32, 0, 1000);
-        row(0, 8, {get(Progress)});
-        uiLabel(L"이번에 저장할 길이 (초) · 보관 시간 이내", 0);
-        edit(ThisSeconds, 0, 0, 0);
-        row(0, 36, {get(ThisSeconds), uiButton(L"기본 시간으로", ResetSeconds, 0)});
-        row(0, 56, {uiButton(L"최근 60초 저장", Save, 0)});
-        uiLabel(L"", 0, 40, false, SaveHint);
-        row(0, 40, {uiButton(L"단축키 변경", JumpKey, 0), uiButton(L"저장 폴더 열기", DashboardFolder, 0)});
-        row(0, 40, {uiButton(L"녹화 시작", Start, 0), uiButton(L"일시정지", Pause, 0)});
-        row(0, 36, {uiButton(L"녹화 중지", Stop, 0), uiButton(L"버퍼 비우기", Clear, 0)});
-        uiLabel(L"일시정지·중지·버퍼 비우기는 아직 저장하지 않은 기록을 지웁니다.", 0, 40);
-        uiLabel(L"", 0, 48, false, PathHint);
-        uiLabel(L"아직 저장 작업이 없습니다.", 0, 40, false, RecentJob);
 
-        uiLabel(L"화면과 소리", 1, 36, true);
-        uiLabel(L"녹화할 모니터", 1);
-        control(WC_COMBOBOXW, L"", MonitorChoice, 1, 0, 0, 600, 250,
+        group(L"최근 기록 저장", 0, 208, 240, 728, 174);
+        label(L"이번 저장 길이", 0, 226, 271, 105);
+        edit(ThisSeconds, 0, 336, 266, 76);
+        label(L"초", 0, 420, 271, 22);
+        button(L"기본 시간으로", ResetSeconds, 0, 456, 266, 112, 28);
+        button(L"최근 60초 저장", Save, 0, 726, 264, 190, 34);
+        fixedLabel(L"", SaveHint, 0, 226, 312, 684, 38);
+        button(L"단축키 변경", JumpKey, 0, 226, 363, 340, 28);
+        button(L"저장 폴더 열기", DashboardFolder, 0, 784, 363, 132, 28);
+
+        group(L"녹화 제어", 0, 208, 426, 728, 96);
+        button(L"녹화 시작", Start, 0, 226, 450, 110, 30);
+        button(L"일시정지", Pause, 0, 346, 450, 110, 30);
+        button(L"녹화 중지", Stop, 0, 466, 450, 110, 30);
+        button(L"버퍼 비우기", Clear, 0, 806, 450, 110, 30);
+        label(L"일시정지·중지·버퍼 비우기는 아직 저장하지 않은 기록을 지웁니다.", 0, 226, 491, 680, 22);
+        group(L"저장 위치와 최근 작업", 0, 208, 534, 728, 96);
+        fixedLabel(L"", PathHint, 0, 226, 556, 684, 32);
+        fixedLabel(L"아직 저장 작업이 없습니다.", RecentJob, 0, 226, 599, 684, 22);
+
+        // Basic and advanced settings occupy the same fixed content area.
+        group(L"화면과 소리", 1, 208, 84, 728, 150);
+        label(L"모니터", 1, 226, 116, 86);
+        control(WC_COMBOBOXW, L"", MonitorChoice, 1, 318, 110, 458, 230,
                 WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL);
-        row(1, 36, {get(MonitorChoice), uiButton(L"장치 새로고침", RefreshDevices, 1)});
-        uiLabel(L"소리가 재생되는 출력 장치", 1);
-        control(WC_COMBOBOXW, L"", AudioChoice, 1, 0, 0, 600, 250,
+        button(L"새로고침", RefreshDevices, 1, 794, 110, 122, 28);
+        label(L"소리 출력 장치", 1, 226, 156, 90);
+        control(WC_COMBOBOXW, L"", AudioChoice, 1, 318, 150, 598, 230,
                 WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL);
-        row(1, 36, {get(AudioChoice)});
-        uiCheck(L"시스템 소리 포함", SystemAudio, 1);
-        uiCheck(L"소리 연결에 실패하면 영상만 저장 허용", VideoOnly, 1);
-        uiLabel(L"기록과 저장", 1, 36, true);
-        uiField(L"최근 기록 보관 시간 (5~600초) · 메모리에 남길 최대 길이", Retention, 1);
-        uiField(L"기본 저장 길이 (초) · 단축키와 트레이에서 사용", DefaultSeconds, 1);
-        uiLabel(L"예: 보관 120초 / 기본 60초 → 최대 2분을 유지하고 단축키는 최근 1분 저장", 1, 40);
-        uiCheck(L"전체 길이가 쌓인 경우만 저장", FullOnly, 1);
-        uiField(L"저장 폴더", Folder, 1, false);
-        row(1, 36, {uiButton(L"찾아보기", Browse, 1), uiButton(L"폴더 열기", OpenFolder, 1)});
-        uiLabel(L"일반", 1, 36, true);
-        uiCheck(L"저장 완료·오류 알림", Notify, 1);
-        uiCheck(L"Windows 로그인 시 앱 자동 실행", AutoStart, 1);
-        row(1, 40, {uiButton(L"고급 설정 펼치기", Advanced, 1)});
+        fixedCheck(L"시스템 소리 포함", SystemAudio, 1, 226, 194, 200);
+        fixedCheck(L"소리 연결 실패 시 영상만 허용", VideoOnly, 1, 490, 194, 420);
 
-        uiLabel(L"화질과 자원", 5, 36, true);
-        uiField(L"출력 폭 (320~3840, 짝수)", Width, 5);
-        uiField(L"출력 높이 (240~2160, 짝수)", Height, 5);
-        uiField(L"FPS (10~60) · 초당 화면 수", Fps, 5);
-        uiField(L"영상 비트레이트 (1~50 Mbps)", Bitrate, 5);
-        uiField(L"최근 기록 메모리 한도 (32~2048 MiB)", BufferLimit, 5);
-        uiField(L"녹화·저장 메모리 예산 (MiB)", TotalLimit, 5);
-        uiLabel(L"총 예산은 저장 참조와 예약량을 포함한 제한이며, 전체 프로세스 메모리 상한은 아닙니다.", 5,
-                44);
-        uiField(L"저장 대기 수 (1~10)", QueueLimit, 5);
-        uiLabel(L"SDR · H.264 / AAC · 앞쪽 키프레임부터 저장해 실제 길이는 조금 길어질 수 있습니다.", 5, 44);
-        uiLabel(L"설정 적용 시 현재 기록이 비워집니다. 진행 중인 저장 작업은 유지됩니다.", 1, 40);
-        uiLabel(L"설정이 적용되어 있습니다.", 1, 48, false, SettingsHint);
-        row(1, 40, {uiButton(L"설정 적용", Apply, 1), uiButton(L"변경 되돌리기", Revert, 1)});
-        row(1, 36, {uiButton(L"기본값 불러오기", Defaults, 1)});
+        group(L"기록과 저장", 1, 208, 246, 728, 182);
+        fixedField(L"보관 시간 (5~600초)", Retention, 1, 226, 273, 170, 82);
+        fixedField(L"기본 저장 길이 (초)", DefaultSeconds, 1, 568, 273, 178, 82);
+        label(L"보관 시간은 최대 기록 길이, 기본 저장은 단축키와 트레이의 저장 길이입니다.", 1, 226, 313, 684,
+              22);
+        fixedCheck(L"전체 길이가 쌓인 경우만 저장", FullOnly, 1, 226, 341, 600);
+        label(L"저장 폴더", 1, 226, 387, 82);
+        control(L"EDIT", L"", Folder, 1, 312, 380, 394, 28, WS_TABSTOP | ES_AUTOHSCROLL);
+        control(L"STATIC", L"", Folder + 1000, 1, 0, 0, 0, 0);
+        button(L"찾아보기", Browse, 1, 718, 380, 92, 28);
+        button(L"열기", OpenFolder, 1, 822, 380, 94, 28);
+        group(L"일반", 1, 208, 440, 728, 74);
+        fixedCheck(L"저장 완료·오류 알림", Notify, 1, 226, 469, 246);
+        fixedCheck(L"Windows 로그인 시 앱 자동 실행", AutoStart, 1, 490, 469, 426);
 
-        uiLabel(L"내 단축키", 2, 40, true);
-        uiLabel(L"입력칸을 선택하고 Ctrl / Alt / Shift + 키 조합을 누르세요.", 2, 40);
-        control(HOTKEY_CLASSW, L"", KeyField, 2, 0, 0, 600, 40, WS_TABSTOP);
-        row(2, 44, {get(KeyField)});
-        row(2, 40, {uiButton(L"단축키 적용", ApplyKey, 2), uiButton(L"기본 키 불러오기", ResetKey, 2)});
-        row(2, 40, {uiButton(L"단축키 테스트", TestKey, 2)});
-        uiLabel(L"", 2, 110, false, KeyStatus);
-        uiLabel(L"이 화면에서는 키를 눌러도 저장하지 않습니다.\n녹화 화면으로 돌아가거나 창을 숨기면 기본 "
-                L"저장 길이로 저장합니다.\n충돌 시 기존 단축키를 유지합니다.",
-                2, 90);
+        group(L"영상 품질", 5, 208, 84, 728, 180);
+        fixedField(L"출력 폭 (짝수)", Width, 5, 226, 118, 164);
+        fixedField(L"출력 높이 (짝수)", Height, 5, 568, 118, 176);
+        fixedField(L"FPS (10~60)", Fps, 5, 226, 166, 164);
+        fixedField(L"영상 Mbps (1~50)", Bitrate, 5, 568, 166, 176);
+        label(L"SDR · H.264 영상 / AAC 오디오\n앞쪽 키프레임부터 저장하므로 실제 파일 길이는 요청보다 조금 "
+              L"길 수 있습니다.",
+              5, 226, 215, 684, 40);
+        group(L"메모리와 저장 작업", 5, 208, 276, 728, 238);
+        fixedField(L"최근 기록 메모리 (MiB)", BufferLimit, 5, 226, 312, 250, 100);
+        fixedField(L"녹화·저장 총 예산 (MiB)", TotalLimit, 5, 226, 356, 250, 100);
+        fixedField(L"저장 대기 수 (1~10)", QueueLimit, 5, 226, 400, 250, 100);
+        label(L"총 예산은 최근 기록 한도보다 128 MiB 이상 커야 합니다.\n저장 참조와 예약량을 포함하며 전체 "
+              L"프로세스 메모리 상한은 아닙니다.",
+              5, 226, 453, 684, 42);
 
-        uiLabel(L"저장 작업", 3, 40, true);
-        uiLabel(L"이번 실행에서 요청한 작업입니다. 완료한 영상을 선택해 열 수 있습니다.", 3, 40);
-        control(WC_LISTVIEWW, L"", Jobs, 3, 0, 0, 600, 300,
+        fixedLabel(L"설정이 적용되어 있습니다.", SettingsHint, 6, 216, 526, 712, 40);
+        label(L"설정 적용 시 미저장 기록이 비워집니다. 진행 중인 저장 작업은 유지됩니다.", 6, 216, 570, 712,
+              22);
+        button(L"설정 적용", Apply, 6, 216, 602, 106, 28);
+        button(L"변경 되돌리기", Revert, 6, 334, 602, 116, 28);
+        button(L"기본값 불러오기", Defaults, 6, 462, 602, 126, 28);
+        button(L"고급 설정", Advanced, 6, 790, 602, 136, 28);
+
+        group(L"최근 기록 저장 단축키", 2, 208, 84, 728, 212);
+        label(L"입력칸에서 Ctrl / Alt / Shift + 키 조합을 누르세요.", 2, 226, 116, 684, 22);
+        control(HOTKEY_CLASSW, L"", KeyField, 2, 226, 155, 280, 30, WS_TABSTOP);
+        button(L"단축키 적용", ApplyKey, 2, 522, 155, 116, 30);
+        button(L"기본 키 불러오기", ResetKey, 2, 650, 155, 144, 30);
+        button(L"단축키 테스트", TestKey, 2, 226, 210, 136, 30);
+        label(L"테스트 화면에서는 영상이 저장되지 않습니다.", 2, 378, 216, 524, 22);
+        group(L"등록 상태", 2, 208, 308, 728, 152);
+        fixedLabel(L"", KeyStatus, 2, 226, 341, 684, 104);
+        group(L"사용 안내", 2, 208, 472, 728, 158);
+        label(L"녹화 화면으로 돌아가거나 창을 숨기면 기본 저장 길이로 저장합니다.\n다른 앱이 사용하는 "
+              L"조합이면 기존 단축키를 유지합니다.\n기본 조합: Ctrl + Shift + F9",
+              2, 226, 504, 684, 100);
+
+        group(L"이번 실행의 저장 작업", 3, 208, 84, 728, 368);
+        control(WC_LISTVIEWW, L"", Jobs, 3, 222, 109, 700, 282,
                 WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS);
         ListView_SetExtendedListViewStyle(get(Jobs), LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
         wchar_t const *cols[] = {L"작업", L"상태", L"요청 / 실제 (초)", L"파일 / 메시지"};
@@ -413,26 +413,27 @@ struct App {
             c.cx = px(140);
             ListView_InsertColumn(get(Jobs), i, &c);
         }
-        row(3, 300, {get(Jobs)});
-        row(3, 40, {uiButton(L"영상 열기", OpenVideo, 3), uiButton(L"폴더에서 보기", RevealVideo, 3)});
-        row(3, 36, {uiButton(L"작업 취소", CancelJob, 3)});
-        uiLabel(L"아직 저장 작업이 없습니다. 녹화 화면에서 최근 기록을 저장하세요.", 3, 110, false,
-                JobDetail);
+        button(L"영상 열기", OpenVideo, 3, 226, 410, 106, 28);
+        button(L"폴더에서 보기", RevealVideo, 3, 344, 410, 126, 28);
+        button(L"작업 취소", CancelJob, 3, 806, 410, 110, 28);
+        group(L"선택 작업 상세", 3, 208, 464, 728, 166);
+        fixedLabel(L"아직 저장 작업이 없습니다. 녹화 화면에서 최근 기록을 저장하세요.", JobDetail, 3, 226,
+                   491, 684, 122);
 
-        uiLabel(L"도움말 및 진단", 4, 40, true);
-        uiLabel(L"소리가 없나요? 설정에서 실제 재생 중인 출력 장치를 확인하세요.\n저장이 실패하나요? 저장 "
-                L"폴더의 쓰기 권한과 남은 공간을 확인하세요.",
-                4, 68);
-        control(L"EDIT", L"", Diagnostics, 4, 0, 0, 600, 300,
+        group(L"문제 해결", 4, 208, 84, 728, 112);
+        label(L"소리가 없으면 설정에서 실제 재생 중인 출력 장치를 확인하세요.\n저장이 실패하면 저장 폴더의 "
+              L"쓰기 권한과 남은 공간을 확인하세요.",
+              4, 226, 115, 684, 60);
+        group(L"진단 정보", 4, 208, 208, 728, 338);
+        control(L"EDIT", L"", Diagnostics, 4, 222, 232, 700, 256,
                 WS_TABSTOP | ES_MULTILINE | ES_READONLY | WS_VSCROLL);
-        row(4, 300, {get(Diagnostics)});
-        row(4, 40,
-            {uiButton(L"진단 복사", CopyDiagnostics, 4), uiButton(L"진단 파일 저장", ExportDiagnostics, 4)});
-        row(4, 40, {uiButton(L"장치 다시 연결", Reconnect, 4)});
-        uiLabel(L"재연결하면 기존 기록을 비우고 녹화를 시작합니다.\n진단 내용을 공유하기 전에 개인 정보가 "
-                L"포함되어 있는지 확인하세요.",
-                4, 64);
-        uiButton(L"앱 종료", Exit, -1);
+        button(L"진단 복사", CopyDiagnostics, 4, 226, 504, 108, 28);
+        button(L"진단 파일 저장", ExportDiagnostics, 4, 346, 504, 132, 28);
+        button(L"장치 다시 연결", Reconnect, 4, 780, 504, 136, 28);
+        label(L"재연결하면 기존 기록을 비우고 녹화를 시작합니다.\n진단 내용을 공유하기 전에 개인 정보가 "
+              L"포함되어 있는지 확인하세요.",
+              4, 226, 565, 684, 52);
+
         loadFields(settings);
         number(ThisSeconds, settings.saveSeconds);
         keyRegistered = RegisterHotKey(window, hotkeyId, settings.hotkeyModifiers | MOD_NOREPEAT,
@@ -512,9 +513,13 @@ struct App {
         text(SettingsHint, L"적용되지 않은 변경 사항이 있습니다. 화면을 이동해도 편집 값은 유지됩니다.");
     }
     void fieldError(int id, std::wstring const &message) {
+        text(SettingsHint, message);
         if (id >= Width && id <= QueueLimit) {
             advanced = true;
-            text(Advanced, L"고급 설정 접기");
+            text(Advanced, L"기본 설정");
+        } else {
+            advanced = false;
+            text(Advanced, L"고급 설정");
         }
         if (fields.contains(id + 1000))
             text(id + 1000, message);
@@ -747,12 +752,12 @@ struct App {
                           std::to_wstring(settings.saveSeconds) + L"초 · 변경");
         text(PathHint, L"저장 위치: " + settings.folder);
         std::wostringstream diag;
-        diag << L"ReplayCapture 0.1.0\r\n상태: " << st.state << L"\r\n인코더: " << st.encoder << L"\r\n영상: "
-             << settings.width << L"×" << settings.height << L" @ " << settings.fps << L"fps\r\n입력 프레임: "
-             << st.frames << L" / 누락: " << st.drops << L"\r\n압축 메모리: " << st.bytes
-             << L" bytes\r\n저장 참조: " << st.pinned << L" bytes\r\n실제 보관: " << st.available
-             << L"초\r\n오디오: " << st.audio << L"\r\n오류: " << st.error << L"\r\n단축키: "
-             << (keyRegistered ? L"등록됨" : L"등록 실패")
+        diag << L"ReplayCapture 0.1.0\r\n글꼴: " << fontFace << L"\r\n상태: " << st.state << L"\r\n인코더: "
+             << st.encoder << L"\r\n영상: " << settings.width << L"×" << settings.height << L" @ "
+             << settings.fps << L"fps\r\n입력 프레임: " << st.frames << L" / 누락: " << st.drops
+             << L"\r\n압축 메모리: " << st.bytes << L" bytes\r\n저장 참조: " << st.pinned
+             << L" bytes\r\n실제 보관: " << st.available << L"초\r\n오디오: " << st.audio << L"\r\n오류: "
+             << st.error << L"\r\n단축키: " << (keyRegistered ? L"등록됨" : L"등록 실패")
              << L"\r\n환경 제한: SDR / 현재 선택한 출력 장치의 소리\r\n";
         text(Diagnostics, diag.str());
         auto jobs = engine.jobs();
@@ -880,7 +885,7 @@ struct App {
             switch (id) {
             case Advanced:
                 advanced = !advanced;
-                text(Advanced, advanced ? L"고급 설정 접기" : L"고급 설정 펼치기");
+                text(Advanced, advanced ? L"기본 설정" : L"고급 설정");
                 layout();
                 break;
             case Revert:
@@ -1042,7 +1047,7 @@ LRESULT CALLBACK windowProc(HWND window, UINT msg, WPARAM wp, LPARAM lp) {
                 app->draftChanged();
             return 0;
         case WM_SIZE:
-            if (app->fields.contains(Exit))
+            if (app->fields.contains(Exit) && app->fields.contains(Jobs))
                 app->layout();
             return 0;
         case WM_NEXTDLGCTL: {
@@ -1051,68 +1056,35 @@ LRESULT CALLBACK windowProc(HWND window, UINT msg, WPARAM wp, LPARAM lp) {
                 SetFocus(next);
             return 0;
         }
-        case WM_VSCROLL: {
-            SCROLLINFO si{sizeof(si), SIF_ALL};
-            GetScrollInfo(window, SB_VERT, &si);
-            switch (LOWORD(wp)) {
-            case SB_LINEUP:
-                app->scroll -= 36;
-                break;
-            case SB_LINEDOWN:
-                app->scroll += 36;
-                break;
-            case SB_PAGEUP:
-                app->scroll -= int(si.nPage);
-                break;
-            case SB_PAGEDOWN:
-                app->scroll += int(si.nPage);
-                break;
-            case SB_THUMBTRACK:
-                app->scroll = si.nTrackPos;
-                break;
-            default:
-                break;
-            }
-            app->scroll = std::clamp(app->scroll, 0, std::max(0, si.nMax - int(si.nPage) + 1));
-            app->layout();
-            return 0;
-        }
+        case WM_VSCROLL:
         case WM_MOUSEWHEEL:
-            app->scroll -= GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA * 72;
-            app->layout();
-            return 0;
-        case WM_APP + 2: {
-            auto h = reinterpret_cast<HWND>(wp);
-            if (!IsWindowVisible(h))
-                return 0;
-            RECT r{}, client{};
-            GetWindowRect(h, &r);
-            MapWindowPoints(nullptr, window, reinterpret_cast<POINT *>(&r), 2);
-            GetClientRect(window, &client);
-            int delta = r.top < 0 ? r.top - app->px(12)
-                                  : (r.bottom > client.bottom ? r.bottom - client.bottom + app->px(12) : 0);
-            if (delta) {
-                app->scroll += MulDiv(delta, 96, app->dpi);
-                app->layout();
-            }
-            return 0;
-        }
+            return 0; // The fixed main window never scrolls; child lists keep their own scrollbars.
         case WM_NOTIFY: {
             auto n = reinterpret_cast<NMHDR *>(lp);
-            if (n->code == NM_CUSTOMDRAW && (n->idFrom == Save || (n->idFrom == Start && !app->isRecording) ||
-                                             (n->idFrom >= NavRecord && n->idFrom <= NavDiagnostics &&
-                                              int(n->idFrom) - NavRecord == app->page))) {
+            if (n->code == NM_CUSTOMDRAW) {
+                bool navigation = n->idFrom >= NavRecord && n->idFrom <= NavDiagnostics;
+                bool primary = n->idFrom == Save || (n->idFrom == Start && !app->isRecording);
                 auto d = reinterpret_cast<NMCUSTOMDRAW *>(lp);
-                if (d->dwDrawStage == CDDS_PREPAINT && IsWindowEnabled(n->hwndFrom) && !ui::highContrast()) {
-                    auto brush = CreateSolidBrush(ui::accent());
+                if ((navigation || primary) && d->dwDrawStage == CDDS_PREPAINT && !ui::highContrast()) {
+                    bool enabled = IsWindowEnabled(n->hwndFrom);
+                    bool selected = navigation ? int(n->idFrom) - NavRecord == app->page : enabled;
+                    COLORREF fill = selected ? ui::accent() : RGB(239, 242, 247);
+                    if (enabled && (d->uItemState & CDIS_SELECTED))
+                        fill = selected ? RGB(28, 65, 162) : RGB(215, 224, 239);
+                    else if (enabled && (d->uItemState & CDIS_HOT))
+                        fill = selected ? RGB(30, 75, 190) : RGB(226, 233, 245);
+                    auto brush = CreateSolidBrush(fill);
                     FillRect(d->hdc, &d->rc, brush);
                     DeleteObject(brush);
                     SetBkMode(d->hdc, TRANSPARENT);
-                    SetTextColor(d->hdc, ui::accentText());
+                    SetTextColor(d->hdc, !enabled ? GetSysColor(COLOR_GRAYTEXT)
+                                                  : (selected ? ui::accentText() : ui::foreground()));
+                    auto oldFont = SelectObject(d->hdc, app->font);
                     auto value = app->text(int(n->idFrom));
                     RECT r = d->rc;
-                    InflateRect(&r, -8, -2);
+                    InflateRect(&r, -6, -2);
                     DrawTextW(d->hdc, value.c_str(), -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(d->hdc, oldFont);
                     if (d->uItemState & CDIS_FOCUS) {
                         InflateRect(&r, -3, -3);
                         DrawFocusRect(d->hdc, &r);
@@ -1172,22 +1144,28 @@ LRESULT CALLBACK windowProc(HWND window, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return TRUE;
         case WM_DPICHANGED: {
-            app->dpi = HIWORD(wp);
+            app->fitDpi();
             app->fonts();
             auto r = reinterpret_cast<RECT *>(lp);
-            SetWindowPos(window, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top,
+            RECT size{0, 0, app->px(DesignWidth), app->px(DesignHeight)};
+            AdjustWindowRectExForDpi(&size, WindowStyle, FALSE, 0, GetDpiForWindow(window));
+            SetWindowPos(window, nullptr, r->left, r->top, size.right - size.left, size.bottom - size.top,
                          SWP_NOZORDER);
             app->layout();
             return 0;
         }
         case WM_GETMINMAXINFO: {
             auto limits = reinterpret_cast<MINMAXINFO *>(lp);
-            MONITORINFO info{sizeof(info)};
-            GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &info);
-            limits->ptMinTrackSize.x = std::min(app->px(540), int(info.rcWork.right - info.rcWork.left));
-            limits->ptMinTrackSize.y = std::min(app->px(320), int(info.rcWork.bottom - info.rcWork.top));
+            RECT size{0, 0, app->px(DesignWidth), app->px(DesignHeight)};
+            AdjustWindowRectExForDpi(&size, WindowStyle, FALSE, 0, GetDpiForWindow(window));
+            limits->ptMinTrackSize = {size.right - size.left, size.bottom - size.top};
+            limits->ptMaxTrackSize = limits->ptMinTrackSize;
             return 0;
         }
+        case WM_SYSCOMMAND:
+            if ((wp & 0xFFF0) == SC_MAXIMIZE || (wp & 0xFFF0) == SC_SIZE)
+                return 0;
+            break;
         case WM_CTLCOLORSTATIC: {
             HDC dc = reinterpret_cast<HDC>(wp);
             SetTextColor(dc, ui::foreground());
@@ -1203,7 +1181,15 @@ LRESULT CALLBACK windowProc(HWND window, UINT msg, WPARAM wp, LPARAM lp) {
             RECT r;
             GetClientRect(window, &r);
             FillRect(reinterpret_cast<HDC>(wp), &r, app->background);
+            app->paintGroups(reinterpret_cast<HDC>(wp));
             return 1;
+        }
+        case WM_PAINT: {
+            PAINTSTRUCT ps{};
+            auto dc = BeginPaint(window, &ps);
+            app->paintGroups(dc);
+            EndPaint(window, &ps);
+            return 0;
         }
         case WM_DESTROY: {
             KillTimer(window, 1);
@@ -1228,9 +1214,21 @@ LRESULT CALLBACK windowProc(HWND window, UINT msg, WPARAM wp, LPARAM lp) {
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     try {
         Runtime runtime(winrt::apartment_type::single_threaded);
-        HANDLE mutex = CreateMutexW(nullptr, FALSE, L"Local\\ReplayCapture.Application");
+        std::wstring windowClass = L"ReplayCapture.Window", mutexName = L"Local\\ReplayCapture.Application";
+        wchar_t testInstance[65]{};
+        auto count = GetEnvironmentVariableW(L"REPLAYCAPTURE_TEST_INSTANCE", testInstance, 65);
+        if (count > 0 && count < 65) {
+            std::wstring suffix(testInstance);
+            if (suffix.find_first_not_of(
+                    L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") !=
+                std::wstring::npos)
+                throw std::runtime_error("Invalid test instance identifier");
+            windowClass += L".Test." + suffix;
+            mutexName += L".Test." + suffix;
+        }
+        HANDLE mutex = CreateMutexW(nullptr, FALSE, mutexName.c_str());
         if (GetLastError() == ERROR_ALREADY_EXISTS) {
-            auto existing = FindWindowW(L"ReplayCapture.Window", nullptr);
+            auto existing = FindWindowW(windowClass.c_str(), nullptr);
             if (existing) {
                 ShowWindow(existing, SW_RESTORE);
                 SetForegroundWindow(existing);
@@ -1245,7 +1243,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         app.settings = Settings::load(app.warning);
         WNDCLASSEXW c{sizeof(c)};
         c.hInstance = instance;
-        c.lpszClassName = L"ReplayCapture.Window";
+        c.lpszClassName = windowClass.c_str();
         c.lpfnWndProc = windowProc;
         c.hCursor = LoadCursorW(nullptr, IDC_ARROW);
         c.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_REPLAYCAPTURE));
@@ -1254,15 +1252,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                                                   GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
         RegisterClassExW(&c);
         UINT dpi = GetDpiForSystem();
-        RECT rect{0, 0, MulDiv(960, dpi, 96), MulDiv(700, dpi, 96)};
-        DWORD style = WS_OVERLAPPEDWINDOW | WS_VSCROLL | WS_CLIPCHILDREN;
+        RECT rect{0, 0, MulDiv(DesignWidth, dpi, 96), MulDiv(DesignHeight, dpi, 96)};
+        DWORD style = WindowStyle;
         AdjustWindowRectExForDpi(&rect, style, FALSE, 0, dpi);
         HWND window =
             CreateWindowExW(0, c.lpszClassName, L"ReplayCapture", style, CW_USEDEFAULT, CW_USEDEFAULT,
                             rect.right - rect.left, rect.bottom - rect.top, nullptr, nullptr, instance, &app);
         if (!window)
             check(HRESULT_FROM_WIN32(GetLastError()));
-        rect = {0, 0, app.px(1040), app.px(760)};
+        rect = {0, 0, app.px(DesignWidth), app.px(DesignHeight)};
         AdjustWindowRectExForDpi(&rect, style, FALSE, 0, GetDpiForWindow(window));
         MONITORINFO monitorInfo{sizeof(monitorInfo)};
         GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitorInfo);

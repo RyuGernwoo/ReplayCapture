@@ -8,7 +8,7 @@ inline bool highContrast() {
     return (value.dwFlags & HCF_HIGHCONTRASTON) != 0;
 }
 inline COLORREF background() {
-    return highContrast() ? GetSysColor(COLOR_WINDOW) : RGB(245, 247, 250);
+    return highContrast() ? GetSysColor(COLOR_WINDOW) : RGB(255, 255, 255);
 }
 inline COLORREF foreground() {
     return highContrast() ? GetSysColor(COLOR_WINDOWTEXT) : RGB(23, 32, 51);

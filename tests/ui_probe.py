@@ -35,7 +35,8 @@ u.ReleaseDC.argtypes=[W.HWND,W.HDC]
 u.PrintWindow.argtypes=[W.HWND,W.HDC,W.UINT]
 g.GetDIBits.argtypes=[W.HDC,W.HBITMAP,W.UINT,W.UINT,C.c_void_p,C.c_void_p,W.UINT]
 
-def find():return u.FindWindowW('ReplayCapture.Window',None)
+test_instance = 'probe-' + args.run_name
+def find():return u.FindWindowW('ReplayCapture.Window.Test.' + test_instance,None)
 def wait(fn,seconds=15):
     end=time.monotonic()+seconds
     while time.monotonic()<end:
@@ -84,6 +85,7 @@ def capture(h,name):
 def main():
     if find():raise SystemExit('Close existing ReplayCapture before running the isolated probe.')
     env=os.environ.copy();env['REPLAYCAPTURE_DATA_DIR']=str(out/'settings')
+    env['REPLAYCAPTURE_TEST_INSTANCE']=test_instance
     settings_dir=out/'settings';settings_dir.mkdir(exist_ok=True)
     (settings_dir/'settings.json').write_text(json.dumps({'schemaVersion':1,'folder':str(out/'recordings'),'retentionSeconds':10,'saveSeconds':3,'width':1280,'height':720,'notifications':False}),encoding='utf-8')
     p=subprocess.Popen([str(args.exe.resolve())],env=env)

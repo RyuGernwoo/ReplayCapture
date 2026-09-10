@@ -1,3 +1,5 @@
 #include "resource.h"
 
 IDI_REPLAYCAPTURE ICON "../assets/replaycapture-icon.ico"
+IDR_FONT_REGULAR RCDATA "../assets/fonts/Pretendard-Regular.otf"
+IDR_FONT_SEMIBOLD RCDATA "../assets/fonts/Pretendard-SemiBold.otf"

@@ -1,5 +1,7 @@
 # GUI 개선 구현·검증 보고서
 
+> 2026-09-10 당시 기록입니다. 가변 창·스크롤 설계는 이후 고정 창으로 변경되었습니다. 현재 화면과 수정 검증은 [고정 GUI 보고서](GUI_FIXED_LAYOUT_REPORT.ko.md)를 참고하세요.
+
 - 대상: ReplayCapture 0.1.0 GUI 개선 작업
 - 작성일: 2026-09-10
 - 기준 설계: [GUI 디자인 개선 계획](GUI_DESIGN_IMPROVEMENT_PLAN.ko.md)

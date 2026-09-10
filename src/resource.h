@@ -1,3 +1,5 @@
 #pragma once
 
 #define IDI_REPLAYCAPTURE 101
+#define IDR_FONT_REGULAR 201
+#define IDR_FONT_SEMIBOLD 202
