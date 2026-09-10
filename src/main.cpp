@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "resource.h"
 #include <commctrl.h>
 #include <shellapi.h>
 #include <shlobj.h>
@@ -303,7 +304,7 @@ struct App {
         n.uID = 1;
         n.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         n.uCallbackMessage = TrayMessage;
-        n.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+        n.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_REPLAYCAPTURE));
         wcscpy_s(n.szTip, L"ReplayCapture — 녹화 중지");
         Shell_NotifyIconW(NIM_ADD, &n);
         WTSRegisterSessionNotification(window, NOTIFY_FOR_THIS_SESSION);
@@ -880,7 +881,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         c.lpszClassName = L"ReplayCapture.Window";
         c.lpfnWndProc = windowProc;
         c.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-        c.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+        c.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_REPLAYCAPTURE));
+        c.hIconSm = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_REPLAYCAPTURE), IMAGE_ICON,
+                                                  GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
+                                                  LR_DEFAULTCOLOR));
         RegisterClassExW(&c);
         UINT dpi = GetDpiForSystem();
         RECT rect{0, 0, MulDiv(960, dpi, 96), MulDiv(700, dpi, 96)};

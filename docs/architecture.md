@@ -1,41 +1,108 @@
-# 구현 구조
+# ReplayCapture 아키텍처 🛠️
 
-## 구성
+이 문서는 외부 개발자가 현재 구현의 경계와 데이터 흐름을 빠르게 이해하기 위한 요약입니다. 최초 요구사항과 상세 설계 판단은 [초기 구현 계획](../WINDOWS_REPLAY_RECORDER_PLAN.ko.md)에 보존되어 있습니다.
 
-| 모듈 | 책임 |
+## 시스템 개요
+
+ReplayCapture는 Windows 11 x64용 네이티브 데스크톱 앱입니다. 화면과 시스템 출력 오디오를 수집해 메모리 순환 버퍼에 유지하고, GUI·전역 단축키·트레이 메뉴의 저장 요청을 독립된 MP4 내보내기 작업으로 처리합니다.
+
+~~~mermaid
+flowchart LR
+    subgraph Input[입력]
+        V[Windows.Graphics.Capture]
+        A[WASAPI Loopback]
+    end
+
+    subgraph Core[녹화 코어]
+        C[Engine]
+        B[ReplayBuffer]
+        Q[Export Queue]
+    end
+
+    subgraph Output[출력]
+        E[Media Foundation]
+        M[H.264 + AAC MP4]
+    end
+
+    UI[Win32 GUI · Tray · Hotkey] --> C
+    V --> C
+    A --> C
+    C --> B
+    UI --> Q
+    B --> Q
+    Q --> E --> M
+    S[Settings · Auto Start] --> UI
+    S --> C
+~~~
+
+## 모듈 지도
+
+| 파일 | 책임 |
 |---|---|
-| `src/main.cpp` | 한국어 Win32 GUI, 트레이, 전역 단축키, 폴더 선택, 작업 관리, 잠금·절전 이벤트 |
-| `src/settings.*` | JSON 읽기·검증·원자적 교체, 사용자별 저장 경로 |
-| `src/media.*` | WGC, D3D11 영상 변환, WASAPI, Media Foundation 인코더·MP4 다중화 |
-| `src/buffer.*` | 키프레임을 유지하는 압축 순환 버퍼와 참조 공유 스냅샷 |
-| `src/engine.*` | 캡처 worker, 저장 요청 시간 고정, 비동기 저장 worker, 작업·메모리 상한 |
+| <code>src/main.cpp</code> | Win32 창, 트레이, 메시지 루프, 전역 단축키, 설정 화면 연결 |
+| <code>src/engine.*</code> | 캡처 수명 주기, 상태, 저장 요청 큐와 작업 스레드 |
+| <code>src/media.*</code> | 장치 열거, 화면·오디오 수집, H.264/AAC 인코딩과 MP4 작성 |
+| <code>src/buffer.*</code> | 시간·메모리 한도 기반 샘플 보관과 저장 스냅샷 |
+| <code>src/settings.*</code> | 로컬 설정 검증·직렬화와 기본값 관리 |
+| <code>src/common.h</code> | 공통 형식, 런타임 초기화와 오류 처리 보조 |
+| <code>src/resource.h</code>, <code>src/app.rc</code> | 실행 파일과 창·트레이 아이콘 리소스 |
+| <code>tests/</code> | 순환 버퍼, 설정, 내보내기 핵심 동작 검증 |
 
-사용자 프로그램은 `ReplayCapture.exe` 하나입니다. CLI나 외부 제어 서버는 없습니다. 테스트 실행 파일은 개발용이며 배포 ZIP에 포함하지 않습니다.
+## 저장 흐름
 
-## 데이터 흐름
+~~~mermaid
+sequenceDiagram
+    participant UI as GUI·Hotkey·Tray
+    participant RC as Engine
+    participant RB as ReplayBuffer
+    participant EQ as Export Queue
+    participant MF as Media Foundation
 
-WGC의 GPU 표면을 D3D11 video processor로 NV12·목표 크기로 변환합니다. 첫 구현은 NV12를 CPU staging buffer로 읽어 인코더에 전달합니다. 하드웨어 H.264 MFT를 우선 열거하며 하드웨어 인코더가 없으면 Windows 소프트웨어 인코더를 사용합니다. 진단 화면에서 선택된 인코더를 확인할 수 있습니다.
+    RC->>RB: 인코딩된 영상·오디오 샘플 추가
+    UI->>RC: 최근 N초 저장 요청
+    RC->>RB: 요청 시점의 불변 스냅샷 생성
+    RB-->>EQ: 키프레임부터 시작하는 샘플 묶음
+    EQ->>MF: 시간축을 0부터 재기준화해 MP4 작성
+    MF-->>UI: 완료 또는 오류 알림
+~~~
 
-WASAPI loopback의 QPC 시각을 48kHz 스테레오 PCM 시간축으로 변환합니다. 장치 데이터 도착에 120ms 여유를 두고 없는 구간은 무음으로 채웁니다. AAC 인코더는 1024샘플 블록을 처리합니다. 영상과 소리는 같은 단조 시계 원점을 사용하며 컴퓨터 시각 변경의 영향을 받지 않습니다.
+저장 요청은 현재 버퍼의 스냅샷을 사용하므로 내보내기 중에도 새 샘플을 계속 수집할 수 있습니다. 영상은 디코딩 가능한 H.264 키프레임부터 시작하며 오디오는 같은 기준 시각에 맞춰 잘립니다. 그 결과 파일 길이는 요청값보다 최대 한 키프레임 간격 정도 길 수 있습니다.
 
-압축 샘플은 시간·바이트 제한을 받는 메모리 버퍼로 들어갑니다. 영상 삭제는 키프레임 경계를 유지합니다. 저장 요청은 접수 시점 T를 고정하고 인코더 처리 여유 뒤 T 이전 샘플을 선택합니다. 보관 시간 외 2초의 처리 여유를 두며 바이트 상한이 우선합니다. 스냅샷은 데이터 복사 대신 참조를 공유하고, 저장 중 참조 메모리도 총 예산에 포함합니다.
+## 상태와 복구
 
-저장 worker는 압축 H.264/AAC 샘플을 공통 원점으로 이동해 MP4에 기록합니다. `.partial` 파일을 finalize한 뒤 최종 이름으로 변경합니다. 실패·취소 시 해당 임시 파일을 정리합니다. 완료 파일은 덮어쓰지 않습니다.
+~~~mermaid
+stateDiagram-v2
+    [*] --> Stopped
+    Stopped --> Recording: 녹화 시작
+    Recording --> Paused: 일시 정지
+    Paused --> Recording: 다시 시작
+    Recording --> Stopped: 녹화 중지
+    Paused --> Stopped: 녹화 중지
+    Recording --> Recovering: 장치·세션 변경
+    Recovering --> Recording: 재초기화 성공
+    Recovering --> Stopped: 재초기화 실패
+~~~
 
-## 계획서 대비 확정한 구현 선택
+잠금·절전과 캡처 대상 종료 시에는 오래된 버퍼를 그대로 재사용하지 않습니다. 설정 변경이 캡처 형식에 영향을 주면 세션을 다시 만들고 버퍼를 초기화합니다.
 
-- 모듈을 파일 단위로 구성했습니다. 향후 규모가 커지면 계획서의 세부 디렉터리로 나눌 수 있습니다.
-- 모든 설정 적용은 일관되게 새 캡처 세션을 시작합니다. 보관 시간만 바꿀 때도 버퍼 초기화를 GUI에서 안내합니다.
-- 캡처 프레임은 QPC 기반 고정 FPS 스케줄로 샘플링합니다. 입력 프레임 변동과 인코더 수용 불가를 진단의 누락 수로 확인합니다.
-- GPU→CPU NV12 복사가 있는 구현입니다. GPU 메모리 직접 전달 최적화는 현재 구현의 성능 결과를 기준으로 후속 검토합니다.
-- 오디오 입력은 mono/stereo로 제한하며 surround 장치는 스테레오 설정을 안내합니다. HDR은 잘못된 색으로 저장하지 않도록 감지 후 거절합니다.
-- 자동 실행은 앱 시작만 의미합니다. 로그인 직후 자동으로 녹화하지 않습니다.
-- 설정 JSON은 플랫 스키마를 사용합니다. GUI가 모든 사용자 설정을 제공하므로 파일 직접 편집은 필요하지 않습니다.
+## 기술 스택
 
-## 공식 API 참고
+<div>
+  <img src="https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white" alt="C++20" />
+  <img src="https://img.shields.io/badge/Win32-GUI-0078D4?logo=windows&logoColor=white" alt="Win32 GUI" />
+  <img src="https://img.shields.io/badge/C%2B%2FWinRT-Windows_Runtime-0078D4" alt="C++/WinRT" />
+  <img src="https://img.shields.io/badge/Direct3D-11-76B900" alt="Direct3D 11" />
+  <img src="https://img.shields.io/badge/Audio-WASAPI-6A5ACD" alt="WASAPI" />
+  <img src="https://img.shields.io/badge/Media-Media_Foundation-FF6F00" alt="Media Foundation" />
+  <img src="https://img.shields.io/badge/Build-CMake-064F8C?logo=cmake&logoColor=white" alt="CMake" />
+</div>
 
-- [Windows 화면 캡처](https://learn.microsoft.com/en-us/windows/uwp/audio-video-camera/screen-capture)
-- [WASAPI loopback](https://learn.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording)
-- [WASAPI 시간 정보](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudiocaptureclient-getbuffer)
-- [H.264 Media Foundation 인코더](https://learn.microsoft.com/en-us/windows/win32/medfound/h-264-video-encoder)
-- [Sink Writer: 동일 압축 형식의 재다중화](https://learn.microsoft.com/en-us/windows/win32/medfound/using-the-sink-writer)
+## 설계 제약
+
+- 대상은 Windows 11 x64이며 단일 SDR 모니터를 녹화합니다.
+- 시스템 출력 오디오는 mono 또는 stereo PCM을 AAC로 인코딩합니다.
+- 프레임 단위 길이 보정보다 저장 중 캡처가 멈추지 않는 것을 우선합니다.
+- 설정과 영상은 로컬에 저장하며 네트워크 업로드 경로가 없습니다.
+- 마이크, HDR, 여러 모니터 합성, 보호 콘텐츠 캡처는 현재 범위 밖입니다.
+
+빌드 방법은 [README 개발자 가이드](../README.md#-외부-개발자-가이드), 실제 확인 범위는 [검증 보고서](validation-report.md)를 참고하세요.
