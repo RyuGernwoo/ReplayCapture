@@ -1,5 +1,6 @@
 #include "buffer.h"
 #include "settings.h"
+#include "ui/view_state.h"
 #include <iostream>
 using namespace replay;
 void require(bool value, char const *what) {
@@ -63,6 +64,19 @@ int main() {
         }
         require(failed, "reject undecodable buffer without keyframe");
         Settings settings;
+        Status recording;
+        recording.state = L"녹화 중";
+        recording.available = 12;
+        require(ui::saveState(recording, 30, settings).enabled, "allow partial GUI save");
+        settings.requireFull = true;
+        require(!ui::saveState(recording, 30, settings).enabled, "strict GUI save waits");
+        require(!ui::saveState(recording, 0, settings).enabled, "invalid GUI length disabled");
+        require(!ui::saveState(recording, 61, settings).enabled, "GUI length limited to retention");
+        recording.available = 60;
+        require(ui::saveState(recording, 30, settings).enabled, "full GUI save ready");
+        recording.state = L"일시정지";
+        require(!ui::saveState(recording, 30, settings).enabled, "paused GUI save disabled");
+        settings.requireFull = false;
         require(settings.validate().empty(), "default configuration");
         settings.saveSeconds = 601;
         require(!settings.validate().empty(), "invalid save length");

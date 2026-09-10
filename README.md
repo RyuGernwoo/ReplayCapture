@@ -41,6 +41,10 @@ flowchart LR
 
 ## 🚀 세 단계로 시작하기
 
+<img src="docs/images/gui-dashboard.png" alt="ReplayCapture 녹화 대시보드" width="800" />
+
+> 실제 GUI 화면입니다. 저장 폴더는 예시 경로이며, 설정에서 변경할 수 있습니다.
+
 <table>
   <tr>
     <th width="15%">단계</th>
@@ -64,7 +68,7 @@ flowchart LR
   </tr>
 </table>
 
-저장된 파일은 설정한 폴더에 `ReplayCapture_날짜_시간.mp4` 형식으로 생성됩니다. 단축키는 **단축키** 탭에서 원하는 조합으로 바꿀 수 있습니다.
+저장된 파일은 설정한 폴더에 `Replay_날짜_시간_작업번호.mp4` 형식으로 생성됩니다. 단축키는 **단축키** 탭에서 원하는 조합으로 바꿀 수 있습니다.
 
 ## ✨ 주요 기능
 
@@ -90,6 +94,8 @@ flowchart LR
 > 💡 기본 저장 시간은 보관 시간보다 길 수 없습니다. 녹화를 막 시작했거나 버퍼가 초기화된 직후에는 실제 저장 길이가 더 짧을 수 있습니다.
 
 ## 🧭 자주 쓰는 조작
+
+창 크기에 따라 왼쪽 메뉴 또는 상단 탭으로 이동합니다. **설정 → 고급 설정 펼치기**에서 화질·메모리를 조절하고, 입력 오류는 해당 항목 아래에서 확인할 수 있습니다.
 
 | 목적 | GUI 위치 또는 조작 |
 |---|---|
@@ -144,7 +150,7 @@ flowchart TB
 
 ## 🔨 빌드와 검증
 
-요구 환경은 Visual Studio 2022 Build Tools의 MSVC, Windows 11 SDK, CMake 3.24 이상입니다.
+요구 환경은 Visual Studio 2022 Build Tools의 MSVC, Windows 11 SDK, CMake 3.25 이상입니다.
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64

@@ -25,6 +25,8 @@ flowchart LR
 |---|---|
 | [프로젝트 README](../README.md#-외부-개발자-가이드) | 기술 스택, 빌드, 문서 진입점 |
 | [아키텍처](architecture.md) | 모듈 경계, 캡처·버퍼·내보내기 흐름 |
+| [GUI 디자인 개선 계획](GUI_DESIGN_IMPROVEMENT_PLAN.ko.md) | 화면 재설계, 상태별 행동, 접근성, 구현 단계와 검증 기준 |
+| [GUI 구현·성능 보고서](GUI_IMPLEMENTATION_REPORT.ko.md) | 적용한 화면 개선, 회귀 시험, 성능 측정과 검증 한계 |
 | [검증 보고서](validation-report.md) | 검증 환경, 확인된 동작, 남은 검증 |
 | [초기 구현 계획](../WINDOWS_REPLAY_RECORDER_PLAN.ko.md) | 최초 요구사항, 단계별 설계와 수용 기준의 역사 기록 |
 

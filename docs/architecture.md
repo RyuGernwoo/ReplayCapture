@@ -45,6 +45,8 @@ flowchart LR
 | <code>src/buffer.*</code> | 시간·메모리 한도 기반 샘플 보관과 저장 스냅샷 |
 | <code>src/settings.*</code> | 로컬 설정 검증·직렬화와 기본값 관리 |
 | <code>src/common.h</code> | 공통 형식, 런타임 초기화와 오류 처리 보조 |
+| <code>src/ui/theme.h</code> | 색상 토큰과 Windows 고대비 색 대응 |
+| <code>src/ui/view_state.h</code> | 녹화 상태·확보 길이에 따른 저장 활성 여부와 안내 |
 | <code>src/resource.h</code>, <code>src/app.rc</code> | 실행 파일과 창·트레이 아이콘 리소스 |
 | <code>tests/</code> | 순환 버퍼, 설정, 내보내기 핵심 동작 검증 |
 

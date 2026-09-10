@@ -2,6 +2,8 @@
 import ctypes as C
 from ctypes import wintypes as W
 import os, subprocess, time, json, argparse
+import winreg
+from contextlib import contextmanager
 from pathlib import Path
 from PIL import Image
 
@@ -42,7 +44,9 @@ def wait(fn,seconds=15):
         time.sleep(.1)
     raise AssertionError('Timed out')
 def text(h):
-    s=C.create_unicode_buffer(8192);u.GetWindowTextW(h,s,len(s));return s.value
+    s=C.create_unicode_buffer(8192)
+    u.SendMessageW(h,0x000D,len(s),C.addressof(s))
+    return s.value
 def field(h,i):return u.GetDlgItem(h,i)
 def settext(h,i,value):
     s=C.create_unicode_buffer(str(value));u.SendMessageW(field(h,i),0xC,0,C.cast(s,C.c_void_p).value)
@@ -77,51 +81,75 @@ def capture(h,name):
     Image.frombuffer('RGB',(w,hgt),data,'raw','BGRX',0,1).save(out/name)
     g.SelectObject(mem,old);g.DeleteObject(bmp);g.DeleteDC(mem);u.ReleaseDC(h,dc)
 
-if find():raise SystemExit('Close existing ReplayCapture before running the isolated probe.')
-env=os.environ.copy();env['REPLAYCAPTURE_DATA_DIR']=str(out/'settings')
-settings_dir=out/'settings';settings_dir.mkdir(exist_ok=True)
-(settings_dir/'settings.json').write_text(json.dumps({'schemaVersion':1,'folder':str(out/'recordings'),'retentionSeconds':10,'saveSeconds':3,'width':1280,'height':720,'notifications':False}),encoding='utf-8')
-p=subprocess.Popen([str(args.exe.resolve())],env=env)
-try:
-    h=wait(find);time.sleep(1);capture(h,'dashboard.png')
-    page(h,1);settext(h,203,12);click_with_dialog(h,220);capture(h,'settings.png')
-    page(h,2);u.SendMessageW(field(h,300),0x401,0x0600|ord('R'),0);click(h,301)
-    assert 'Ctrl+Alt+R' in text(field(h,304))
-    capture(h,'hotkeys.png');click(h,303);time.sleep(.3);key_combo(ord('R'),shift=False,alt=True)
-    wait(lambda:'성공' in text(field(h,304)))
-    assert u.RegisterHotKey(None,987,3,ord('T'))
+def main():
+    if find():raise SystemExit('Close existing ReplayCapture before running the isolated probe.')
+    env=os.environ.copy();env['REPLAYCAPTURE_DATA_DIR']=str(out/'settings')
+    settings_dir=out/'settings';settings_dir.mkdir(exist_ok=True)
+    (settings_dir/'settings.json').write_text(json.dumps({'schemaVersion':1,'folder':str(out/'recordings'),'retentionSeconds':10,'saveSeconds':3,'width':1280,'height':720,'notifications':False}),encoding='utf-8')
+    p=subprocess.Popen([str(args.exe.resolve())],env=env)
     try:
-        u.SendMessageW(field(h,300),0x401,0x0600|ord('T'),0)
-        click_with_dialog(h,301)
-        assert 'Ctrl+Alt+R' in text(field(h,304)), 'Collision changed active key'
-    finally:u.UnregisterHotKey(None,987)
-    page(h,0)
-    click(h,101);wait(lambda:'녹화 중' in text(field(h,109)),30)
-    time.sleep(6);settext(h,107,3);click(h,104);time.sleep(2)
-    capture(h,'recording.png')
-    before=len(list((out/'recordings').glob('*.mp4')))
-    u.ShowWindow(h,0);key_combo(ord('R'),shift=False,alt=True)
-    wait(lambda:len(list((out/'recordings').glob('*.mp4')))>before)
-    u.ShowWindow(h,9);page(h,3);capture(h,'jobs.png');page(h,4);capture(h,'diagnostics.png');page(h,0)
-    summary=text(field(h,111));assert '보관된 기록' in summary
-    click(h,102);wait(lambda:'일시정지' in text(field(h,109)))
-    click(h,102);wait(lambda:'녹화 중' in text(field(h,109)),30)
-    click(h,103);wait(lambda:'중지' in text(field(h,109)))
-    result={'gui_start_pause_resume_stop':'PASS','gui_save':'PASS','gui_settings_apply':'PASS','hotkey_collision_rollback':'PASS','custom_hotkey_hidden_window':'PASS','hotkey_test_mode':'PASS','summary':summary}
-    (out/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
-finally:
-    h=find()
-    if h:click(h,106)
-    p.wait(timeout=15)
-persisted=json.loads((settings_dir/'settings.json').read_text(encoding='utf-8'))
-assert persisted['hotkeyKey']==ord('R') and persisted['retentionSeconds']==12
-p=subprocess.Popen([str(args.exe.resolve())],env=env)
-try:
-    h=wait(find);wait(lambda:'Ctrl+Alt+R' in text(field(h,304)))
-    result['restart_settings_and_hotkey']='PASS'
-    (out/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
-finally:
-    h=find()
-    if h:click(h,106)
-    p.wait(timeout=15)
-print('GUI probe complete')
+        h=wait(find);time.sleep(1);capture(h,'dashboard.png')
+        page(h,1);settext(h,203,12);click_with_dialog(h,220);capture(h,'settings.png')
+        page(h,2);u.SendMessageW(field(h,300),0x401,0x0600|ord('R'),0);click(h,301)
+        assert 'Ctrl+Alt+R' in text(field(h,304))
+        capture(h,'hotkeys.png');click(h,303);time.sleep(.3);key_combo(ord('R'),shift=False,alt=True)
+        wait(lambda:'성공' in text(field(h,304)))
+        assert u.RegisterHotKey(None,987,3,ord('T'))
+        try:
+            u.SendMessageW(field(h,300),0x401,0x0600|ord('T'),0)
+            click_with_dialog(h,301)
+            assert 'Ctrl+Alt+R' in text(field(h,304)), 'Collision changed active key'
+        finally:u.UnregisterHotKey(None,987)
+        page(h,0)
+        click(h,101);wait(lambda:'녹화 중' in text(field(h,109)),30)
+        time.sleep(6);settext(h,107,3);click(h,104);time.sleep(2)
+        capture(h,'recording.png')
+        before=len(list((out/'recordings').glob('*.mp4')))
+        u.ShowWindow(h,0);key_combo(ord('R'),shift=False,alt=True)
+        wait(lambda:len(list((out/'recordings').glob('*.mp4')))>before)
+        u.ShowWindow(h,9);page(h,3);capture(h,'jobs.png');page(h,4);capture(h,'diagnostics.png');page(h,0)
+        summary=text(field(h,111));assert '보관된 기록' in summary
+        click(h,102);wait(lambda:'일시정지' in text(field(h,109)))
+        click(h,102);wait(lambda:'녹화 중' in text(field(h,109)),30)
+        click(h,103);wait(lambda:'중지' in text(field(h,109)))
+        result={'gui_start_pause_resume_stop':'PASS','gui_save':'PASS','gui_settings_apply':'PASS','hotkey_collision_rollback':'PASS','custom_hotkey_hidden_window':'PASS','hotkey_test_mode':'PASS','summary':summary}
+        (out/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+    finally:
+        h=find()
+        if h:click(h,106)
+        p.wait(timeout=15)
+    persisted=json.loads((settings_dir/'settings.json').read_text(encoding='utf-8'))
+    assert persisted['hotkeyKey']==ord('R') and persisted['retentionSeconds']==12
+    p=subprocess.Popen([str(args.exe.resolve())],env=env)
+    try:
+        h=wait(find);wait(lambda:'Ctrl+Alt+R' in text(field(h,304)))
+        result['restart_settings_and_hotkey']='PASS'
+        (out/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+    finally:
+        h=find()
+        if h:click(h,106)
+        p.wait(timeout=15)
+    print('GUI probe complete')
+
+@contextmanager
+def preserve_auto_run():
+    path = r'Software\Microsoft\Windows\CurrentVersion\Run'
+    previous = None
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+            previous = winreg.QueryValueEx(key, 'ReplayCapture')
+    except FileNotFoundError:
+        pass
+    try:
+        yield
+    finally:
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, path) as key:
+            if previous is not None:
+                winreg.SetValueEx(key, 'ReplayCapture', 0, previous[1], previous[0])
+            else:
+                try: winreg.DeleteValue(key, 'ReplayCapture')
+                except FileNotFoundError: pass
+
+if __name__ == '__main__':
+    with preserve_auto_run():
+        main()

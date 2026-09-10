@@ -7,6 +7,8 @@
 
 ## 검증 요약
 
+GUI 개편 이후의 회귀 검증과 전후 성능 측정은 [GUI 구현·성능 보고서](GUI_IMPLEMENTATION_REPORT.ko.md)에 별도로 기록합니다. 아래 초기 검증 결과와 구분해 확인하세요.
+
 | 영역 | 결과 | 확인 내용 |
 |---|---:|---|
 | Release 빌드 | ✅ 통과 | Visual Studio 2022 x64 Release 구성 |
