@@ -54,3 +54,7 @@ Testing/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Python verification helpers
+__pycache__/
+*.pyc

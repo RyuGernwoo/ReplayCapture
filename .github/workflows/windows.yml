@@ -1,0 +1,19 @@
+name: Windows build
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset windows-x64
+      - name: Build
+        run: cmake --build --preset release
+      - name: Unit tests
+        run: ctest --preset release
+      - name: Package
+        run: cpack --config build/CPackConfig.cmake -C Release -B dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ReplayCapture-windows-x64
+          path: dist/*.zip
