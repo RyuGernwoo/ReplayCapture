@@ -78,7 +78,7 @@ Settings Settings::load(std::wstring &warning) {
         s.hotkeyModifiers = number(L"hotkeyModifiers", MOD_CONTROL | MOD_SHIFT);
         s.hotkeyKey = number(L"hotkeyKey", VK_F9);
         s.systemAudio = j.GetNamedBoolean(L"systemAudio", true);
-        s.allowVideoOnly = j.GetNamedBoolean(L"allowVideoOnly", false);
+        s.allowVideoOnly = true; // Audio fallback is always enabled, including for older settings.
         s.requireFull = j.GetNamedBoolean(L"requireFull", false);
         s.notifications = j.GetNamedBoolean(L"notifications", true);
         s.autoStart = j.GetNamedBoolean(L"autoStart", false);

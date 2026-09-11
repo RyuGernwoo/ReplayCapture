@@ -106,15 +106,19 @@ def main():
         click(h,101);wait(lambda:'녹화 중' in text(field(h,109)),30)
         time.sleep(6);settext(h,107,3);click(h,104);time.sleep(2)
         capture(h,'recording.png')
+        u.GetWindowRect.argtypes=[W.HWND,C.POINTER(W.RECT)]
+        outer=W.RECT();stop=W.RECT()
+        u.GetWindowRect(h,C.byref(outer));u.GetWindowRect(field(h,103),C.byref(stop))
+        red,green,blue=Image.open(out/'recording.png').getpixel((stop.left-outer.left+12,(stop.top+stop.bottom)//2-outer.top))
+        assert red>green+80 and red>blue+80, 'Recording stop button must be red'
         before=len(list((out/'recordings').glob('*.mp4')))
         u.ShowWindow(h,0);key_combo(ord('R'),shift=False,alt=True)
         wait(lambda:len(list((out/'recordings').glob('*.mp4')))>before)
         u.ShowWindow(h,9);page(h,3);capture(h,'jobs.png');page(h,4);capture(h,'diagnostics.png');page(h,0)
         summary=text(field(h,111));assert '보관된 기록' in summary
-        click(h,102);wait(lambda:'일시정지' in text(field(h,109)))
-        click(h,102);wait(lambda:'녹화 중' in text(field(h,109)),30)
+        assert not field(h,102) and not field(h,105) and not field(h,556)
         click(h,103);wait(lambda:'중지' in text(field(h,109)))
-        result={'gui_start_pause_resume_stop':'PASS','gui_save':'PASS','gui_settings_apply':'PASS','hotkey_collision_rollback':'PASS','custom_hotkey_hidden_window':'PASS','hotkey_test_mode':'PASS','summary':summary}
+        result={'gui_start_stop':'PASS','removed_controls':'PASS','gui_save':'PASS','gui_settings_apply':'PASS','hotkey_collision_rollback':'PASS','custom_hotkey_hidden_window':'PASS','hotkey_test_mode':'PASS','summary':summary}
         (out/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
     finally:
         h=find()
@@ -126,6 +130,22 @@ def main():
     try:
         h=wait(find);wait(lambda:'Ctrl+Alt+R' in text(field(h,304)))
         result['restart_settings_and_hotkey']='PASS'
+        (out/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+    finally:
+        h=find()
+        if h:click(h,106)
+        p.wait(timeout=15)
+    persisted.update(systemAudio=True,allowVideoOnly=False,audioDevice='ReplayCapture-test-missing-device')
+    (settings_dir/'settings.json').write_text(json.dumps(persisted),encoding='utf-8')
+    p=subprocess.Popen([str(args.exe.resolve())],env=env)
+    try:
+        h=wait(find);click(h,101);wait(lambda:'녹화 중' in text(field(h,109)),30)
+        wait(lambda:'영상만 기록' in text(field(h,500)))
+        time.sleep(4);before=len(list((out/'recordings').glob('*.mp4')))
+        settext(h,107,2);click(h,104)
+        wait(lambda:len(list((out/'recordings').glob('*.mp4')))>before)
+        result['audio_failure_video_fallback']='PASS'
+        result['recording_stop_red']='PASS'
         (out/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
     finally:
         h=find()

@@ -76,7 +76,9 @@ enum Id {
     NavSettings,
     NavKey,
     NavJobs,
-    NavDiagnostics
+    NavDiagnostics,
+    NavInfo,
+    AboutText = 570
 };
 struct Control {
     HWND handle;
@@ -200,7 +202,7 @@ struct App {
         SetForegroundWindow(window);
     }
     void selectPage(int p) {
-        page = p;
+        page = p == 5 ? 8 : p;
         TabCtrl_SetCurSel(tab, p);
         keyTest = false;
         text(TestKey, L"단축키 테스트");
@@ -300,15 +302,15 @@ struct App {
         control(L"STATIC", L"", 0, -1, 20, 66, 916, 2, SS_ETCHEDHORZ);
         control(L"STATIC", L"", 0, -1, 188, 82, 2, 548, SS_ETCHEDVERT);
         tab = control(WC_TABCONTROLW, L"", Tab, -2, 0, 0, 0, 0);
-        wchar_t const *names[] = {L"녹화", L"설정", L"단축키", L"저장 작업", L"도움말·진단"};
-        for (int i = 0; i < 5; ++i) {
+        wchar_t const *names[] = {L"녹화", L"설정", L"단축키", L"저장 작업", L"도움말·진단", L"정보"};
+        for (int i = 0; i < 6; ++i) {
             TCITEMW item{};
             item.mask = TCIF_TEXT;
             item.pszText = const_cast<LPWSTR>(names[i]);
             TabCtrl_InsertItem(tab, i, &item);
             button(names[i], NavRecord + i, -1, 20, 94 + i * 46, 150, 34);
         }
-        button(L"앱 종료", Exit, -1, 20, 594, 150, 30);
+        button(L"종료", Exit, -1, 20, 594, 150, 30);
 
         group(L"녹화 상태", 0, 208, 84, 728, 144);
         fixedLabel(L"중지", StatusText, 0, 226, 108, 200, 30, true);
@@ -317,21 +319,18 @@ struct App {
         SendMessageW(get(Progress), PBM_SETRANGE32, 0, 1000);
 
         group(L"최근 기록 저장", 0, 208, 240, 728, 174);
-        label(L"이번 저장 길이", 0, 226, 271, 105);
+        label(L"저장 길이", 0, 226, 271, 105);
         edit(ThisSeconds, 0, 336, 266, 76);
         label(L"초", 0, 420, 271, 22);
         button(L"기본 시간으로", ResetSeconds, 0, 456, 266, 112, 28);
-        button(L"최근 60초 저장", Save, 0, 726, 264, 190, 34);
-        fixedLabel(L"", SaveHint, 0, 226, 312, 684, 38);
-        button(L"단축키 변경", JumpKey, 0, 226, 363, 340, 28);
+        button(L"최근 60초 저장", Save, 0, 226, 312, 190, 34);
+        fixedLabel(L"", SaveHint, 0, 226, 365, 530, 38);
         button(L"저장 폴더 열기", DashboardFolder, 0, 784, 363, 132, 28);
 
         group(L"녹화 제어", 0, 208, 426, 728, 96);
         button(L"녹화 시작", Start, 0, 226, 450, 110, 30);
-        button(L"일시정지", Pause, 0, 346, 450, 110, 30);
-        button(L"녹화 중지", Stop, 0, 466, 450, 110, 30);
-        button(L"버퍼 비우기", Clear, 0, 806, 450, 110, 30);
-        label(L"일시정지·중지·버퍼 비우기는 아직 저장하지 않은 기록을 지웁니다.", 0, 226, 491, 680, 22);
+        button(L"녹화 중지", Stop, 0, 346, 450, 110, 30);
+        label(L"녹화를 중지하면 아직 저장하지 않은 기록이 지워집니다.", 0, 226, 491, 680, 22);
         group(L"저장 위치와 최근 작업", 0, 208, 534, 728, 96);
         fixedLabel(L"", PathHint, 0, 226, 556, 684, 32);
         fixedLabel(L"아직 저장 작업이 없습니다.", RecentJob, 0, 226, 599, 684, 22);
@@ -346,7 +345,6 @@ struct App {
         control(WC_COMBOBOXW, L"", AudioChoice, 1, 318, 150, 598, 230,
                 WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL);
         fixedCheck(L"시스템 소리 포함", SystemAudio, 1, 226, 194, 200);
-        fixedCheck(L"소리 연결 실패 시 영상만 허용", VideoOnly, 1, 490, 194, 420);
 
         group(L"기록과 저장", 1, 208, 246, 728, 182);
         fixedField(L"보관 시간 (5~600초)", Retention, 1, 226, 273, 170, 82);
@@ -429,10 +427,31 @@ struct App {
                 WS_TABSTOP | ES_MULTILINE | ES_READONLY | WS_VSCROLL);
         button(L"진단 복사", CopyDiagnostics, 4, 226, 504, 108, 28);
         button(L"진단 파일 저장", ExportDiagnostics, 4, 346, 504, 132, 28);
-        button(L"장치 다시 연결", Reconnect, 4, 780, 504, 136, 28);
-        label(L"재연결하면 기존 기록을 비우고 녹화를 시작합니다.\n진단 내용을 공유하기 전에 개인 정보가 "
-              L"포함되어 있는지 확인하세요.",
-              4, 226, 565, 684, 52);
+        group(L"ReplayCapture 0.1.0", 8, 208, 84, 728, 160);
+        label(L"최근 화면과 시스템 소리를 MP4로 저장하는 Windows 프로그램\n\n"
+              L"개발자: RyuGernwoo    |    qesadgun@gmail.com\n"
+              L"GitHub: https://github.com/RyuGernwoo\n"
+              L"Copyright © 2026 RyuGernwoo. 개인·비영리 목적 무료 사용.",
+              8, 226, 112, 690, 122);
+        group(L"소프트웨어 사용권 계약 및 안내", 8, 208, 260, 728, 370);
+        control(
+            L"EDIT",
+            L"사용권 계약 (2026-09-11)\r\n\r\n"
+            L"1. 사용 허락\r\n개인·비영리 목적으로 이 프로그램을 무료로 설치하고 사용할 수 있습니다. 상업적 "
+            L"이용은 개발자의 사전 허락이 필요합니다.\r\n\r\n"
+            L"2. 재배포\r\n변경하지 않은 공식 배포본은 이 안내와 포함된 라이선스를 유지하여 무료로 재배포할 "
+            L"수 있습니다. 유료 판매는 허용하지 않습니다.\r\n\r\n"
+            L"3. 권리와 책임\r\n프로그램의 저작권은 개발자에게 있습니다. 화면과 소리를 기록할 권한을 "
+            L"확인하고 타인의 개인정보와 저작권을 존중해야 합니다.\r\n\r\n"
+            L"4. 보증\r\n프로그램은 현 상태로 제공됩니다. 법률이 허용하는 범위에서 특정 목적 적합성이나 "
+            L"기록의 완전성을 보증하지 않으며, 사용으로 발생한 손해에 대한 책임을 제한합니다.\r\n\r\n"
+            L"5. 소스 코드 및 제3자 구성요소\r\n이 계약은 배포 프로그램의 사용과 재배포에 적용됩니다. 소스 "
+            L"코드 수정·재배포 권한은 별도 허락을 확인하세요. Pretendard 글꼴에는 SIL Open Font License "
+            L"1.1이 별도로 적용됩니다. 전문은 assets/fonts/OFL.txt에 포함되어 있습니다.\r\n\r\n"
+            L"6. 개인정보 및 문의\r\n화면·소리는 로컬에서 처리하고 영상은 지정 폴더에 저장합니다. 진단 "
+            L"내용을 공유할 때는 개인정보를 확인하세요. 문의: qesadgun@gmail.com\r\n\r\n"
+            L"사용권 전문: SOFTWARE_LICENSE.ko.md\r\n프로젝트: https://github.com/RyuGernwoo/ReplayCapture",
+            AboutText, 8, 226, 288, 690, 318, WS_TABSTOP | ES_MULTILINE | ES_READONLY | WS_VSCROLL);
 
         loadFields(settings);
         number(ThisSeconds, settings.saveSeconds);
@@ -492,7 +511,6 @@ struct App {
         number(TotalLimit, s.totalMiB);
         number(QueueLimit, s.queueLimit);
         checked(SystemAudio, s.systemAudio);
-        checked(VideoOnly, s.allowVideoOnly);
         checked(FullOnly, s.requireFull);
         checked(Notify, s.notifications);
         checked(AutoStart, s.autoStart);
@@ -583,7 +601,7 @@ struct App {
         s.totalMiB = number(TotalLimit);
         s.queueLimit = number(QueueLimit);
         s.systemAudio = checked(SystemAudio);
-        s.allowVideoOnly = checked(VideoOnly);
+        s.allowVideoOnly = true;
         s.requireFull = checked(FullOnly);
         s.notifications = checked(Notify);
         s.autoStart = checked(AutoStart);
@@ -729,12 +747,10 @@ struct App {
         if (isRecording != running) {
             isRecording = running;
             InvalidateRect(get(Start), nullptr, TRUE);
+            InvalidateRect(get(Stop), nullptr, TRUE);
         }
         EnableWindow(get(Start), !running && st.state != L"시작 중");
-        EnableWindow(get(Pause), running || paused);
-        text(Pause, paused ? L"재개" : L"일시정지");
         EnableWindow(get(Stop), running || paused || st.state == L"오류");
-        EnableWindow(get(Clear), running);
         int seconds = 0;
         try {
             seconds = number(ThisSeconds);
@@ -745,11 +761,9 @@ struct App {
                        : L"저장 길이를 확인하세요");
         auto saveView = ui::saveState(st, seconds, settings);
         EnableWindow(get(Save), saveView.enabled);
-        text(SaveHint, st.error.empty()
-                           ? saveView.explanation
-                           : L"녹화 문제: 도움말·진단에서 원인을 확인하고 장치를 다시 연결하세요.");
-        text(JumpKey, hotkeyName(settings.hotkeyModifiers, settings.hotkeyKey) + L" · 기본 " +
-                          std::to_wstring(settings.saveSeconds) + L"초 · 변경");
+        text(SaveHint, !st.error.empty() ? L"도움말·진단에서 녹화 상태를 확인하세요."
+                       : (seconds < 1 || seconds > settings.retention) ? saveView.explanation
+                                                                       : L"");
         text(PathHint, L"저장 위치: " + settings.folder);
         std::wostringstream diag;
         diag << L"ReplayCapture 0.1.0\r\n글꼴: " << fontFace << L"\r\n상태: " << st.state << L"\r\n인코더: "
@@ -878,7 +892,7 @@ struct App {
         if (closing && id != CancelJob)
             return;
         try {
-            if (id >= NavRecord && id <= NavDiagnostics) {
+            if (id >= NavRecord && id <= NavInfo) {
                 selectPage(id - NavRecord);
                 return;
             }
@@ -897,10 +911,6 @@ struct App {
                 text(SettingsHint, L"변경을 되돌렸습니다. 현재 적용된 값입니다.");
                 layout();
                 break;
-            case JumpKey:
-                selectPage(2);
-                SetFocus(get(KeyField));
-                break;
             case DashboardFolder:
                 std::filesystem::create_directories(settings.folder);
                 ShellExecuteW(window, L"open", settings.folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
@@ -908,17 +918,8 @@ struct App {
             case Start:
                 engine.start(settings);
                 break;
-            case Pause:
-                if (engine.status().state == L"일시정지")
-                    engine.start(settings);
-                else
-                    engine.stop(true);
-                break;
             case Stop:
                 engine.stop();
-                break;
-            case Clear:
-                engine.clear();
                 break;
             case Save:
                 requestSave(number(ThisSeconds));
@@ -981,9 +982,6 @@ struct App {
             case ExportDiagnostics:
                 exportDiag();
                 break;
-            case Reconnect:
-                engine.start(settings);
-                break;
             case Exit:
                 closing = true;
                 engine.stop();
@@ -1003,10 +1001,9 @@ struct App {
         auto save = L"최근 " + std::to_wstring(settings.saveSeconds) + L"초 저장";
         AppendMenuW(menu, MF_STRING, 601, save.c_str());
         AppendMenuW(menu, MF_STRING, Start, L"녹화 시작");
-        AppendMenuW(menu, MF_STRING, Pause, L"일시정지 / 재개");
         AppendMenuW(menu, MF_STRING, Stop, L"녹화 중지");
         AppendMenuW(menu, MF_STRING, 602, L"설정");
-        AppendMenuW(menu, MF_STRING, Exit, L"앱 종료");
+        AppendMenuW(menu, MF_STRING, Exit, L"종료");
         POINT p;
         GetCursorPos(&p);
         SetForegroundWindow(window);
@@ -1062,17 +1059,23 @@ LRESULT CALLBACK windowProc(HWND window, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_NOTIFY: {
             auto n = reinterpret_cast<NMHDR *>(lp);
             if (n->code == NM_CUSTOMDRAW) {
-                bool navigation = n->idFrom >= NavRecord && n->idFrom <= NavDiagnostics;
-                bool primary = n->idFrom == Save || (n->idFrom == Start && !app->isRecording);
+                bool navigation = n->idFrom >= NavRecord && n->idFrom <= NavInfo;
+                bool danger = n->idFrom == Stop && app->isRecording;
+                bool primary = n->idFrom == Save || (n->idFrom == Start && !app->isRecording) || danger;
                 auto d = reinterpret_cast<NMCUSTOMDRAW *>(lp);
                 if ((navigation || primary) && d->dwDrawStage == CDDS_PREPAINT && !ui::highContrast()) {
                     bool enabled = IsWindowEnabled(n->hwndFrom);
-                    bool selected = navigation ? int(n->idFrom) - NavRecord == app->page : enabled;
+                    bool selected =
+                        navigation ? int(n->idFrom) - NavRecord == (app->page == 8 ? 5 : app->page) : enabled;
                     COLORREF fill = selected ? ui::accent() : RGB(239, 242, 247);
                     if (enabled && (d->uItemState & CDIS_SELECTED))
                         fill = selected ? RGB(28, 65, 162) : RGB(215, 224, 239);
                     else if (enabled && (d->uItemState & CDIS_HOT))
                         fill = selected ? RGB(30, 75, 190) : RGB(226, 233, 245);
+                    if (danger)
+                        fill = (d->uItemState & CDIS_SELECTED) ? RGB(153, 27, 27)
+                               : (d->uItemState & CDIS_HOT)    ? RGB(185, 28, 28)
+                                                               : RGB(220, 38, 38);
                     auto brush = CreateSolidBrush(fill);
                     FillRect(d->hdc, &d->rc, brush);
                     DeleteObject(brush);
@@ -1123,7 +1126,7 @@ LRESULT CALLBACK windowProc(HWND window, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_CLOSE:
             ShowWindow(window, SW_HIDE);
-            app->balloon(L"트레이에서 계속 실행합니다. 종료하려면 메뉴의 앱 종료를 선택하십시오.");
+            app->balloon(L"트레이에서 계속 실행합니다. 종료하려면 메뉴의 종료를 선택하십시오.");
             return 0;
         case WM_WTSSESSION_CHANGE:
             if (wp == WTS_SESSION_LOCK) {

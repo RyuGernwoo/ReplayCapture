@@ -29,7 +29,7 @@ try:
     u.SendMessageW(h,0x112,0xF030,0)
     assert rect(h)==original
     results.append('fixed size: resize/maximize/parent scroll styles absent')
-    for selected in (0,1,2,3,4,0,4,2,1,0):
+    for selected in (0,1,2,3,4,5,0,5,4,2,1,0):
         click(h,560+selected);p.time.sleep(.15)
         client=W.RECT();u.GetClientRect(h,C.byref(client))
         for i in range(101,565):
@@ -37,19 +37,23 @@ try:
             if c and u.IsWindowVisible(c):
                 l,t,r,b=rect(c,h)
                 assert 0<=l<r<=client.right and 0<=t<b<=client.bottom,(selected,i,(l,t,r,b))
-        before=[rect(field(h,560+i)) for i in range(5)]
+        before=[rect(field(h,560+i)) for i in range(6)]
         for delta in (120,-120,120,-120):
             u.SendMessageW(h,0x20A,(delta & 0xffff)<<16,0)
             u.SendMessageW(h,0x115,3 if delta<0 else 2,0)
-        assert before==[rect(field(h,560+i)) for i in range(5)]
+        assert before==[rect(field(h,560+i)) for i in range(6)]
         capture(h,'sidebar-check.png')
         image=p.Image.open(p.out/'sidebar-check.png')
         left,top,_,_=rect(h)
-        for i in range(5):
+        for i in range(6):
             l,t,r,b=rect(field(h,560+i))
             red,green,blue=image.getpixel((l-left+12,(t+b)//2-top))
             assert (blue>red+50 and blue>green+50)==(i==selected),(selected,i,(red,green,blue))
-    results.append('10 sidebar transitions: exactly one blue selection; scroll preserves geometry')
+    results.append('12 sidebar transitions: exactly one blue selection; scroll preserves geometry')
+    assert text(field(h,106))=='종료'
+    for removed in (102,105,216,503,556): assert not field(h,removed),removed
+    page(h,5);assert '소스 코드' in text(field(h,570));capture(h,'about.png')
+    page(h,0)
     capture(h,'dashboard-wide.png')
     page(h,1);capture(h,'settings-basic.png')
     assert not u.IsWindowVisible(field(h,208))

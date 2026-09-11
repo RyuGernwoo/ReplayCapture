@@ -154,8 +154,8 @@ void Engine::captureSession(Settings s) {
             audio = std::make_unique<Encoder>(false, 0, 0, 0, 0,
                                               [this](PacketPtr p) { buffer_.append(std::move(p)); });
         } catch (...) {
-            if (!s.allowVideoOnly)
-                throw;
+            audio.reset();
+            loopback.reset();
             std::lock_guard lock(mutex_);
             status_.error = L"소리 연결 실패: 영상만 기록합니다. " + errorText();
         }
